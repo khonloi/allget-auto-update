@@ -1,3 +1,15 @@
+<#
+.SYNOPSIS
+    Writes a formatted log message to both the console and a persistent log file.
+.DESCRIPTION
+    This function standardizes logging across the auto-update scripts. It handles
+    timestamp generation, coloring for console output based on severity level,
+    and safely appends to the log file even if it's temporarily locked.
+.PARAMETER message
+    The message text to log.
+.PARAMETER level
+    The severity level of the log (INFO, WARN, ERROR, SUCCESS, SKIP). Defaults to INFO.
+#>
 function Write-Log ($message, $level = "INFO") {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logLine = "[$timestamp] [$level] $message"
@@ -15,6 +27,19 @@ function Write-Log ($message, $level = "INFO") {
     }
 }
 
+<#
+.SYNOPSIS
+    Displays a Windows Toast notification for application update status.
+.DESCRIPTION
+    Registers a custom AppUserModelId if necessary and triggers a native Windows
+    toast notification to alert the user about the success or failure of an app update.
+.PARAMETER appName
+    The name of the application that was updated.
+.PARAMETER isSuccess
+    Boolean indicating whether the update was successful.
+.PARAMETER errorDesc
+    An error message description if the update failed.
+#>
 function Show-AppToastNotification ($appName, $isSuccess, $errorDesc) {
     try {
         [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
@@ -62,28 +87,106 @@ function Show-AppToastNotification ($appName, $isSuccess, $errorDesc) {
     }
 }
 
-# Helper Function: Get running processes matching an application name/ID
-function Get-RunningAppProcesses ($appName, $appId) {
+<#
+.SYNOPSIS
+    Retrieves a list of running processes that match a given application name or ID.
+.DESCRIPTION
+    Uses fuzzy matching against ProcessName, MainWindowTitle, and optionally
+    FileVersionInfo to determine if an application is currently running. This is used
+    to prevent updating applications that the user is actively using.
+.PARAMETER appName
+    The display name of the application.
+.PARAMETER appId
+    The package identifier of the application.
+.PARAMETER allProcesses
+    An optional pre-fetched list of all running processes. If $null, it will fetch them.
+.OUTPUTS
+    A list of matching System.Diagnostics.Process objects.
+#>
+function Get-RunningAppProcesses ($appName, $appId, $allProcesses = $null) {
+    # Ignore common generic words to avoid false positive process matches
     $ignoreWords = @('microsoft', 'windows', 'client', 'edition', 'studio', 'software', 'desktop', 'full', 'system', 'project', 'common', 'tools', 'server', 'application', 'package', 'update', 'installer')
+    
+    # Split the app name and ID into unique search tokens
     $words = ($appName + ' ' + $appId.Replace('.', ' ')) -split '\s+' | Where-Object { $_.Length -ge 4 -and $ignoreWords -notcontains $_.ToLower() } | Select-Object -Unique
     
     if ($words.Count -eq 0) { return @() }
     
-    $allProcesses = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -or $_.CPU -gt 0 }
-    $matched = @()
+    # Fetch processes if not provided
+    if ($null -eq $allProcesses) {
+        $allProcesses = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -or $_.CPU -gt 0 }
+    }
+    
+    $matched = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+    $escapedWords = $words | ForEach-Object { [regex]::Escape($_) }
     
     foreach ($proc in $allProcesses) {
         $procName = $proc.ProcessName
         $title = $proc.MainWindowTitle
-        $desc = ''
-        try { $desc = $proc.MainModule.FileVersionInfo.FileDescription } catch {}
         
-        foreach ($word in $words) {
-            if ($procName -match [regex]::Escape($word) -or $title -match [regex]::Escape($word) -or $desc -match [regex]::Escape($word)) {
-                $matched += $proc
+        $isMatch = $false
+        
+        # Fast matching: check Process Name and Window Title first
+        foreach ($regex in $escapedWords) {
+            if ($procName -match $regex -or $title -match $regex) {
+                $isMatch = $true
                 break
             }
         }
+        
+        # Slow matching: Only check FileDescription if ProcessName and Title didn't match, as it's an expensive call
+        if (-not $isMatch) {
+            $desc = ''
+            try { $desc = $proc.MainModule.FileVersionInfo.FileDescription } catch {}
+            if (-not [string]::IsNullOrWhiteSpace($desc)) {
+                foreach ($regex in $escapedWords) {
+                    if ($desc -match $regex) {
+                        $isMatch = $true
+                        break
+                    }
+                }
+            }
+        }
+        
+        if ($isMatch) {
+            $matched.Add($proc)
+        }
     }
+    
     return $matched | Select-Object -Unique -Property Id, ProcessName, MainWindowTitle, MainWindowHandle
 }
+
+<#
+.SYNOPSIS
+    Formats a raw JSON string into a pretty-printed version with custom indentation.
+.DESCRIPTION
+    Takes raw JSON, splits it into lines, and meticulously rebuilds the string with
+    two-space indentation. Optimized using a Generic List for high performance.
+.PARAMETER json
+    The raw JSON string to be formatted.
+.OUTPUTS
+    A formatted, pretty-printed JSON string.
+#>
+function Format-JsonString ($json) {
+    $lines = $json -split "`r?\n"
+    $res = [System.Collections.Generic.List[string]]::new()
+    $indent = 0
+    
+    foreach ($line in $lines) {
+        $t = $line.Trim()
+        if ($t -eq '') { continue }
+        
+        # Decrease indent for closing brackets
+        if ($t -match '^[}\]]') { $indent = [math]::Max(0, $indent - 1) }
+        
+        # Format the colon spacing
+        $fmt = $t -replace '":\s+', '": '
+        $res.Add(('  ' * $indent) + $fmt)
+        
+        # Increase indent for opening brackets
+        if ($t -match '[{\[]$') { $indent++ }
+    }
+    
+    return ($res -join "`r`n")
+}
+

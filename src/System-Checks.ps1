@@ -1,3 +1,13 @@
+<#
+.SYNOPSIS
+    Evaluates system conditions before allowing package updates.
+.DESCRIPTION
+    Checks multiple prerequisites including UAC elevation, network connectivity,
+    metered connections, battery life, CPU load, and the presence of WinGet.
+    If any check fails, it logs the reason and returns false to abort the update.
+.OUTPUTS
+    A boolean indicating whether it is safe to proceed with updates.
+#>
 function Invoke-PreRequisiteChecks {
     # Ensure script runs with Administrator privileges
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -26,7 +36,8 @@ function Invoke-PreRequisiteChecks {
                 Write-Log "Running on a metered connection. Postponing auto-update." "SKIP"
                 return $false
             }
-        } catch {
+        }
+        catch {
             # Silently ignore if WinRT namespace fails on older systems
         }
     }

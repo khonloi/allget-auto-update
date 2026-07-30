@@ -1,5 +1,5 @@
 # ==============================================================================
-# AllGet Auto-Update (iOS / Android Style)
+# AllGet Auto-Update
 # ==============================================================================
 # Features:
 # 1. Smart Active-App Detection: Skips open apps to prevent work disruption.
@@ -27,7 +27,7 @@ else {
 }
 
 # 3. Load Components
-. (Join-Path $PSScriptRoot "src\SystemChecks.ps1")
+. (Join-Path $PSScriptRoot "src\System-Checks.ps1")
 . (Join-Path $PSScriptRoot "src\Update-Packages.ps1")
 
 try {

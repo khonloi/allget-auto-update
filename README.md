@@ -37,7 +37,7 @@ AllGet Auto-Update/
 ├── src/                        # Core runtime modules
 │   ├── Config.ps1              # Config loader & environment setup
 │   ├── Helpers.ps1             # Logging, process checking & toast notifications
-│   ├── SystemChecks.ps1        # Battery, network (metered), and CPU load verification
+│   ├── System-Checks.ps1       # Battery, network (metered), and CPU load verification
 │   ├── Update-Packages.ps1     # Multi-package manager update handlers
 │   └── Dialog.ps1              # Modern WinUI 3 styled WPF prompt dialog
 ├── config/                     # Task Scheduler templates

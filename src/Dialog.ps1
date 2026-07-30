@@ -15,6 +15,24 @@ try {
 }
 catch {}
 
+<#
+.SYNOPSIS
+    Displays a modern, WinUI 3 styled adaptive prompt dialog to the user.
+.DESCRIPTION
+    This function creates a WPF window styled to look like a native Windows 11
+    dialog box. It asks the user for permission to close a background application
+    so it can be updated. It automatically adapts to the user's light/dark theme
+    and system accent colors. It includes a countdown timer that defaults to
+    skipping the update if the user does not respond.
+.PARAMETER appName
+    The display name of the application requesting to be closed.
+.PARAMETER appId
+    The package identifier of the application.
+.PARAMETER timeoutSeconds
+    The number of seconds to wait for user input before automatically aborting.
+.OUTPUTS
+    A boolean indicating whether the user approved closing the application.
+#>
 function Dialog ($appName, $appId, $timeoutSeconds = 30) {
     try {
         Add-Type -AssemblyName PresentationFramework

@@ -4,6 +4,10 @@
     "minBatteryLevel": 50,
     "maxCpuLoad": 80
   },
+  "delayUpdates": {
+    "enabled": true,
+    "days": 1
+  },
   "ignoredPatterns": [
     "^Microsoft\\.Edge",
     "^Microsoft\\.OneDrive",

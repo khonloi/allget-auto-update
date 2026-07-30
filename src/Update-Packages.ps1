@@ -17,6 +17,69 @@ function Invoke-PackageUpdates {
         return $false
     }
 
+    $script:pendingUpdatesFile = Join-Path $script:logsDir "pending-updates.json"
+    $script:pendingUpdates = @{}
+    $script:pendingUpdatesChanged = $false
+
+    if (Test-Path $script:pendingUpdatesFile) {
+        try {
+            $content = Get-Content $script:pendingUpdatesFile -Raw | ConvertFrom-Json
+            if ($content) {
+                $content.psobject.properties | ForEach-Object {
+                    $script:pendingUpdates[$_.Name] = [PSCustomObject]@{
+                        Version = $_.Value.Version
+                        DiscoveredAt = $_.Value.DiscoveredAt
+                    }
+                }
+            }
+        } catch {
+            Write-Log "Failed to parse pending-updates.json. Starting fresh." "WARN"
+        }
+    }
+
+    function Save-PendingUpdates {
+        if ($script:pendingUpdatesChanged) {
+            try {
+                $script:pendingUpdates | ConvertTo-Json -Depth 3 | Set-Content $script:pendingUpdatesFile -Encoding UTF8
+                $script:pendingUpdatesChanged = $false
+            } catch {
+                Write-Log "Failed to save pending-updates.json" "WARN"
+            }
+        }
+    }
+
+    function Test-IsUpdateDelayed ($manager, $pkgId, $version) {
+        if (-not $script:delayUpdatesEnabled) { return $false }
+        $key = "$manager`:$pkgId"
+        $now = Get-Date
+        
+        if ($script:pendingUpdates.ContainsKey($key)) {
+            $entry = $script:pendingUpdates[$key]
+            if ($entry.Version -eq $version) {
+                $daysPassed = ($now - [datetime]$entry.DiscoveredAt).TotalDays
+                if ($daysPassed -lt $script:delayUpdatesDays) {
+                    return $true
+                }
+                return $false
+            }
+        }
+        
+        $script:pendingUpdates[$key] = [PSCustomObject]@{
+            Version = $version
+            DiscoveredAt = $now.ToString("o")
+        }
+        $script:pendingUpdatesChanged = $true
+        return $true
+    }
+
+    function Remove-PendingUpdate ($manager, $pkgId) {
+        $key = "$manager`:$pkgId"
+        if ($script:pendingUpdates.ContainsKey($key)) {
+            $script:pendingUpdates.Remove($key)
+            $script:pendingUpdatesChanged = $true
+        }
+    }
+
     # ==============================================================================
     # 1. WinGet Updates
     # ==============================================================================
@@ -36,6 +99,8 @@ function Invoke-PackageUpdates {
         $header = $updateCheck[$headerIndex]
         $idIdx = $header.IndexOf('Id')
         $verIdx = $header.IndexOf('Version')
+        $availIdx = $header.IndexOf('Available')
+        $sourceIdx = $header.IndexOf('Source')
         
         for ($j = $headerIndex + 2; $j -lt $updateCheck.Count; $j++) {
             $line = $updateCheck[$j]
@@ -43,8 +108,16 @@ function Invoke-PackageUpdates {
             if ($line.Length -gt $verIdx) {
                 $appName = $line.Substring(0, $idIdx).Trim()
                 $appId = $line.Substring($idIdx, $verIdx - $idIdx).Trim()
+                $appAvail = "UNKNOWN"
+                if ($availIdx -gt 0 -and $line.Length -gt $availIdx) {
+                    if ($sourceIdx -gt $availIdx -and $line.Length -gt $sourceIdx) {
+                        $appAvail = $line.Substring($availIdx, $sourceIdx - $availIdx).Trim()
+                    } else {
+                        $appAvail = $line.Substring($availIdx).Trim()
+                    }
+                }
                 if ($appName -and $appId) {
-                    $appRows += [PSCustomObject]@{ Name = $appName; Id = $appId }
+                    $appRows += [PSCustomObject]@{ Name = $appName; Id = $appId; Available = $appAvail }
                 }
             }
         }
@@ -60,6 +133,14 @@ function Invoke-PackageUpdates {
             # Check if the app is in the system/ignored bypass list
             if (Test-IsIgnored -pkgName $app.Name -pkgId $app.Id) {
                 Write-Log "Bypassing '$($app.Name)' ($($app.Id)) - System / Self-updating application." "SKIP"
+                $stats.Skipped++
+                continue
+            }
+
+            if (Test-IsUpdateDelayed -manager "winget" -pkgId $app.Id -version $app.Available) {
+                $discovered = [datetime]$script:pendingUpdates["winget:$($app.Id)"].DiscoveredAt
+                $daysRemaining = [math]::Ceiling($script:delayUpdatesDays - ((Get-Date) - $discovered).TotalDays)
+                Write-Log "Delaying update for '$($app.Name)' ($($app.Id)) - $daysRemaining day(s) remaining." "SKIP"
                 $stats.Skipped++
                 continue
             }
@@ -121,6 +202,7 @@ function Invoke-PackageUpdates {
                 Write-Log "Updated '$($app.Name)' successfully." "SUCCESS"
                 $stats.Updated++
                 Show-AppToastNotification -appName $app.Name -isSuccess $true -errorDesc ""
+                Remove-PendingUpdate -manager "winget" -pkgId $app.Id
             }
             else {
                 $errDesc = switch ($proc.ExitCode) {
@@ -151,8 +233,13 @@ function Invoke-PackageUpdates {
             foreach ($line in $chocoOutdated) {
                 if ($line -match '^([^|]+)\|([^|]+)\|([^|]+)\|') {
                     $pkgName = $matches[1]
+                    $availVer = $matches[3]
                     if (Test-IsIgnored -pkgName $pkgName -pkgId $pkgName) {
                         Write-Log "Bypassing Chocolatey package '$pkgName' (Matches Ignore List)" "SKIP"
+                    } elseif (Test-IsUpdateDelayed -manager "choco" -pkgId $pkgName -version $availVer) {
+                        $discovered = [datetime]$script:pendingUpdates["choco:$pkgName"].DiscoveredAt
+                        $daysRemaining = [math]::Ceiling($script:delayUpdatesDays - ((Get-Date) - $discovered).TotalDays)
+                        Write-Log "Delaying update for '$pkgName' - $daysRemaining day(s) remaining." "SKIP"
                     } else {
                         $packagesToUpdate += $pkgName
                     }
@@ -167,6 +254,7 @@ function Invoke-PackageUpdates {
                     $proc = Start-Process -FilePath "choco.exe" -ArgumentList "upgrade", $pkg, "-y" -Wait -NoNewWindow -PassThru
                     if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 1641 -or $proc.ExitCode -eq 3010) {
                         Write-Log "Chocolatey package '$pkg' updated successfully." "SUCCESS"
+                        Remove-PendingUpdate -manager "choco" -pkgId $pkg
                     } else {
                         Write-Log "Chocolatey update for '$pkg' returned exit code $($proc.ExitCode)." "WARN"
                     }
@@ -192,9 +280,14 @@ function Invoke-PackageUpdates {
                     $parts = $line -split '\s+'
                     if ($parts.Count -gt 0) {
                         $pkgName = $parts[0]
+                        $availVer = if ($parts.Count -gt 1) { $parts[1] } else { "UNKNOWN" }
                         if ($pkgName -eq "WARN" -or $pkgName -match "Scoop") { continue }
                         if (Test-IsIgnored -pkgName $pkgName -pkgId $pkgName) {
                             Write-Log "Bypassing Scoop package '$pkgName' (Matches Ignore List)" "SKIP"
+                        } elseif (Test-IsUpdateDelayed -manager "scoop" -pkgId $pkgName -version $availVer) {
+                            $discovered = [datetime]$script:pendingUpdates["scoop:$pkgName"].DiscoveredAt
+                            $daysRemaining = [math]::Ceiling($script:delayUpdatesDays - ((Get-Date) - $discovered).TotalDays)
+                            Write-Log "Delaying update for '$pkgName' - $daysRemaining day(s) remaining." "SKIP"
                         } else {
                             $packagesToUpdate += $pkgName
                         }
@@ -210,6 +303,7 @@ function Invoke-PackageUpdates {
                     $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "scoop update $pkg" -Wait -NoNewWindow -PassThru
                     if ($proc.ExitCode -eq 0) {
                         Write-Log "Scoop package '$pkg' updated successfully." "SUCCESS"
+                        Remove-PendingUpdate -manager "scoop" -pkgId $pkg
                     } else {
                         Write-Log "Scoop update for '$pkg' returned exit code $($proc.ExitCode)." "WARN"
                     }
@@ -233,8 +327,13 @@ function Invoke-PackageUpdates {
                     $pkgPath = $parts[0]
                     # path is typically like C:\Users\user\AppData\Roaming\npm\node_modules\package
                     $pkgName = Split-Path $pkgPath -Leaf
+                    $availVer = if ($parts.Count -gt 3) { $parts[3] } else { "UNKNOWN" }
                     if (Test-IsIgnored -pkgName $pkgName -pkgId $pkgName) {
                         Write-Log "Bypassing npm package '$pkgName' (Matches Ignore List)" "SKIP"
+                    } elseif (Test-IsUpdateDelayed -manager "npm" -pkgId $pkgName -version $availVer) {
+                        $discovered = [datetime]$script:pendingUpdates["npm:$pkgName"].DiscoveredAt
+                        $daysRemaining = [math]::Ceiling($script:delayUpdatesDays - ((Get-Date) - $discovered).TotalDays)
+                        Write-Log "Delaying update for '$pkgName' - $daysRemaining day(s) remaining." "SKIP"
                     } else {
                         $packagesToUpdate += $pkgName
                     }
@@ -249,6 +348,7 @@ function Invoke-PackageUpdates {
                     $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "npm update -g $pkg" -Wait -NoNewWindow -PassThru
                     if ($proc.ExitCode -eq 0) {
                         Write-Log "npm package '$pkg' updated successfully." "SUCCESS"
+                        Remove-PendingUpdate -manager "npm" -pkgId $pkg
                     } else {
                         Write-Log "npm update for '$pkg' returned exit code $($proc.ExitCode)." "WARN"
                     }
@@ -266,10 +366,15 @@ function Invoke-PackageUpdates {
             $yarnList = & cmd.exe /c "yarn global list --pattern .*" 2>&1
             $packagesToUpdate = @()
             foreach ($line in $yarnList) {
-                if ($line -match 'info "([^@]+)@') {
+                if ($line -match 'info "([^@]+)@([^"]+)"') {
                     $pkgName = $matches[1]
+                    $availVer = $matches[2]
                     if (Test-IsIgnored -pkgName $pkgName -pkgId $pkgName) {
                         Write-Log "Bypassing yarn package '$pkgName' (Matches Ignore List)" "SKIP"
+                    } elseif (Test-IsUpdateDelayed -manager "yarn" -pkgId $pkgName -version $availVer) {
+                        $discovered = [datetime]$script:pendingUpdates["yarn:$pkgName"].DiscoveredAt
+                        $daysRemaining = [math]::Ceiling($script:delayUpdatesDays - ((Get-Date) - $discovered).TotalDays)
+                        Write-Log "Delaying update for '$pkgName' - $daysRemaining day(s) remaining." "SKIP"
                     } else {
                         $packagesToUpdate += $pkgName
                     }
@@ -284,6 +389,7 @@ function Invoke-PackageUpdates {
                     $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "yarn global upgrade $pkg" -Wait -NoNewWindow -PassThru
                     if ($proc.ExitCode -eq 0) {
                         Write-Log "yarn package '$pkg' updated successfully." "SUCCESS"
+                        Remove-PendingUpdate -manager "yarn" -pkgId $pkg
                     } else {
                         Write-Log "yarn update for '$pkg' returned exit code $($proc.ExitCode)." "WARN"
                     }
@@ -306,10 +412,15 @@ function Invoke-PackageUpdates {
                 # bun pm ls outputs like:
                 # C:\Users\user\.bun\install\global\node_modules (X)
                 # ├── package@version
-                if ($line -match '^\s*[├└]──\s*([^@]+)@') {
+                if ($line -match '^\s*[├└]──\s*([^@]+)@(.*)') {
                     $pkgName = $matches[1]
+                    $availVer = $matches[2].Trim()
                     if (Test-IsIgnored -pkgName $pkgName -pkgId $pkgName) {
                         Write-Log "Bypassing bun package '$pkgName' (Matches Ignore List)" "SKIP"
+                    } elseif (Test-IsUpdateDelayed -manager "bun" -pkgId $pkgName -version $availVer) {
+                        $discovered = [datetime]$script:pendingUpdates["bun:$pkgName"].DiscoveredAt
+                        $daysRemaining = [math]::Ceiling($script:delayUpdatesDays - ((Get-Date) - $discovered).TotalDays)
+                        Write-Log "Delaying update for '$pkgName' - $daysRemaining day(s) remaining." "SKIP"
                     } else {
                         $packagesToUpdate += $pkgName
                     }
@@ -324,6 +435,7 @@ function Invoke-PackageUpdates {
                     $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "bun update -g $pkg" -Wait -NoNewWindow -PassThru
                     if ($proc.ExitCode -eq 0) {
                         Write-Log "bun package '$pkg' updated successfully." "SUCCESS"
+                        Remove-PendingUpdate -manager "bun" -pkgId $pkg
                     } else {
                         Write-Log "bun update for '$pkg' returned exit code $($proc.ExitCode)." "WARN"
                     }
@@ -334,5 +446,6 @@ function Invoke-PackageUpdates {
         }
     }
 
+    Save-PendingUpdates
     return $stats
 }

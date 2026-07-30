@@ -1,0 +1,14 @@
+{
+  "systemChecks": {
+    "skipOnMeteredConnection": true,
+    "minBatteryLevel": 50,
+    "maxCpuLoad": 80
+  },
+  "ignoredPatterns": [
+    "^Microsoft\\.Edge",
+    "^Microsoft\\.OneDrive",
+    "^Microsoft\\.Teams",
+    "^Microsoft\\.WindowsStore",
+    "^Microsoft\\.Defender"
+  ]
+}

@@ -86,7 +86,7 @@ function Dialog ($appName, $appId, $timeoutSeconds = 30) {
     $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="AllGet Auto-Update" Width="440" SizeToContent="Height"
+        Title="AllGet Auto-Update" Width="480" SizeToContent="Height"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" WindowStartupLocation="CenterScreen" ShowInTaskbar="True"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">

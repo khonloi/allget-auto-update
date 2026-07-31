@@ -94,9 +94,60 @@ function Invoke-PackageUpdates {
     }
 
     # ==============================================================================
+    # 0. Update Discovery Phase (Parallelized)
+    # ==============================================================================
+    Write-Log "Checking for updates across package managers concurrently..." "INFO"
+    $discoveryJobs = @{}
+    $tempFiles = @{}
+
+    # WinGet
+    $tempFiles["winget"] = New-TemporaryFile
+    $discoveryJobs["winget"] = Start-Process -FilePath $script:winget -ArgumentList "upgrade", "--accept-source-agreements" -NoNewWindow -PassThru -RedirectStandardOutput $tempFiles["winget"].FullName
+
+    # Chocolatey
+    if (Get-Command choco.exe -ErrorAction SilentlyContinue) {
+        $tempFiles["choco"] = New-TemporaryFile
+        $discoveryJobs["choco"] = Start-Process -FilePath "choco.exe" -ArgumentList "outdated", "-r" -NoNewWindow -PassThru -RedirectStandardOutput $tempFiles["choco"].FullName
+    }
+
+    # Scoop
+    if (Get-Command scoop -ErrorAction SilentlyContinue) {
+        $tempFiles["scoop"] = New-TemporaryFile
+        $discoveryJobs["scoop"] = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "scoop update >nul 2>&1 && scoop status" -NoNewWindow -PassThru -RedirectStandardOutput $tempFiles["scoop"].FullName
+    }
+
+    # npm
+    if (Get-Command npm -ErrorAction SilentlyContinue) {
+        $tempFiles["npm"] = New-TemporaryFile
+        $discoveryJobs["npm"] = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "npm outdated -g --parseable" -NoNewWindow -PassThru -RedirectStandardOutput $tempFiles["npm"].FullName
+    }
+
+    # yarn
+    if (Get-Command yarn -ErrorAction SilentlyContinue) {
+        $tempFiles["yarn"] = New-TemporaryFile
+        $discoveryJobs["yarn"] = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "yarn global list --pattern .*" -NoNewWindow -PassThru -RedirectStandardOutput $tempFiles["yarn"].FullName
+    }
+
+    # bun
+    if (Get-Command bun -ErrorAction SilentlyContinue) {
+        $tempFiles["bun"] = New-TemporaryFile
+        $discoveryJobs["bun"] = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "bun upgrade >nul 2>&1 && bun pm ls -g" -NoNewWindow -PassThru -RedirectStandardOutput $tempFiles["bun"].FullName
+    }
+
+    # Wait for all background discovery jobs to complete
+    $activeJobs = @($discoveryJobs.Values)
+    if ($activeJobs.Count -gt 0) {
+        $activeJobs | Wait-Process -ErrorAction SilentlyContinue
+    }
+
+    # ==============================================================================
     # 1. WinGet Updates
     # ==============================================================================
-    $updateCheck = & $script:winget upgrade --accept-source-agreements 2>&1
+    $updateCheck = @()
+    if ($tempFiles.ContainsKey("winget")) {
+        $updateCheck = Get-Content -Path $tempFiles["winget"].FullName -ErrorAction SilentlyContinue
+        Remove-Item -Path $tempFiles["winget"].FullName -Force -ErrorAction SilentlyContinue
+    }
 
     # Parse table output to find specific apps needing upgrade
     $appRows = @()
@@ -240,10 +291,11 @@ function Invoke-PackageUpdates {
     # ==============================================================================
 
     # Chocolatey
-    if (Get-Command choco.exe -ErrorAction SilentlyContinue) {
-        Write-Log "Checking for Chocolatey updates..." "INFO"
+    if ($tempFiles.ContainsKey("choco")) {
+        Write-Log "Processing Chocolatey updates..." "INFO"
         try {
-            $chocoOutdated = choco outdated -r 2>&1
+            $chocoOutdated = Get-Content -Path $tempFiles["choco"].FullName -ErrorAction SilentlyContinue
+            Remove-Item -Path $tempFiles["choco"].FullName -Force -ErrorAction SilentlyContinue
             $packagesToUpdate = @()
             foreach ($line in $chocoOutdated) {
                 if ($line -match '^([^|]+)\|([^|]+)\|([^|]+)\|') {
@@ -286,12 +338,11 @@ function Invoke-PackageUpdates {
     }
 
     # Scoop
-    if (Get-Command scoop -ErrorAction SilentlyContinue) {
-        Write-Log "Checking for Scoop updates..." "INFO"
+    if ($tempFiles.ContainsKey("scoop")) {
+        Write-Log "Processing Scoop updates..." "INFO"
         try {
-            $scoopUpdateProc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "scoop update" -Wait -NoNewWindow -PassThru
-            
-            $scoopStatus = & cmd.exe /c "scoop status" 2>&1
+            $scoopStatus = Get-Content -Path $tempFiles["scoop"].FullName -ErrorAction SilentlyContinue
+            Remove-Item -Path $tempFiles["scoop"].FullName -Force -ErrorAction SilentlyContinue
             $packagesToUpdate = @()
             $parsing = $false
             foreach ($line in $scoopStatus) {
@@ -340,10 +391,11 @@ function Invoke-PackageUpdates {
     }
 
     # npm
-    if (Get-Command npm -ErrorAction SilentlyContinue) {
-        Write-Log "Checking for global npm updates..." "INFO"
+    if ($tempFiles.ContainsKey("npm")) {
+        Write-Log "Processing global npm updates..." "INFO"
         try {
-            $npmOutdated = & cmd.exe /c "npm outdated -g --parseable" 2>&1
+            $npmOutdated = Get-Content -Path $tempFiles["npm"].FullName -ErrorAction SilentlyContinue
+            Remove-Item -Path $tempFiles["npm"].FullName -Force -ErrorAction SilentlyContinue
             $packagesToUpdate = @()
             foreach ($line in $npmOutdated) {
                 if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -390,10 +442,11 @@ function Invoke-PackageUpdates {
     }
 
     # yarn
-    if (Get-Command yarn -ErrorAction SilentlyContinue) {
-        Write-Log "Checking for global yarn updates..." "INFO"
+    if ($tempFiles.ContainsKey("yarn")) {
+        Write-Log "Processing global yarn updates..." "INFO"
         try {
-            $yarnList = & cmd.exe /c "yarn global list --pattern .*" 2>&1
+            $yarnList = Get-Content -Path $tempFiles["yarn"].FullName -ErrorAction SilentlyContinue
+            Remove-Item -Path $tempFiles["yarn"].FullName -Force -ErrorAction SilentlyContinue
             $packagesToUpdate = @()
             foreach ($line in $yarnList) {
                 if ($line -match 'info "([^@]+)@([^"]+)"') {
@@ -436,12 +489,11 @@ function Invoke-PackageUpdates {
     }
 
     # bun
-    if (Get-Command bun -ErrorAction SilentlyContinue) {
-        Write-Log "Checking for global bun updates..." "INFO"
+    if ($tempFiles.ContainsKey("bun")) {
+        Write-Log "Processing global bun updates..." "INFO"
         try {
-            $bunUpdateProc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "bun upgrade" -Wait -NoNewWindow -PassThru
-            
-            $bunList = & cmd.exe /c "bun pm ls -g" 2>&1
+            $bunList = Get-Content -Path $tempFiles["bun"].FullName -ErrorAction SilentlyContinue
+            Remove-Item -Path $tempFiles["bun"].FullName -Force -ErrorAction SilentlyContinue
             $packagesToUpdate = @()
             foreach ($line in $bunList) {
                 # bun pm ls outputs like:

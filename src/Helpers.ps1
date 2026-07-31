@@ -114,7 +114,8 @@ function Get-RunningAppProcesses ($appName, $appId, $allProcesses = $null) {
     
     # Fetch processes if not provided
     if ($null -eq $allProcesses) {
-        $allProcesses = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -or $_.CPU -gt 0 }
+        # Optimize: Filter out Session 0 (Services/System) to avoid thousands of 'Access Denied' errors later
+        $allProcesses = Get-Process | Where-Object { $_.SessionId -ne 0 -and ($_.MainWindowHandle -ne 0 -or $_.CPU -gt 0) }
     }
     
     $matched = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
@@ -137,7 +138,14 @@ function Get-RunningAppProcesses ($appName, $appId, $allProcesses = $null) {
         # Slow matching: Only check FileDescription if ProcessName and Title didn't match, as it's an expensive call
         if (-not $isMatch) {
             $desc = ''
-            try { $desc = $proc.MainModule.FileVersionInfo.FileDescription } catch {}
+            try { 
+                # Optimize: Skip processes in C:\Windows to avoid Access Denied exceptions on MainModule
+                if (-not [string]::IsNullOrWhiteSpace($proc.Path) -and $proc.Path -match '^[A-Za-z]:\\Windows\\') {
+                    continue
+                }
+                $desc = $proc.MainModule.FileVersionInfo.FileDescription 
+            } catch {}
+            
             if (-not [string]::IsNullOrWhiteSpace($desc)) {
                 foreach ($regex in $escapedWords) {
                     if ($desc -match $regex) {

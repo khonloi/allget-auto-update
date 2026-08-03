@@ -33,10 +33,7 @@ AllGet Auto-Update/
 ├── README.md                   # Project Documentation
 ├── setup/                      # Setup & installation components
 │   ├── setup.ps1               # Installer logic & interactive CLI menu
-│   ├── Run-Hidden.vbs          # Seamless silent launcher (SW_HIDE)
-│   ├── Run.vbs                 # Internal UAC manual run helper
-│   ├── Install.vbs             # Internal UAC installer helper
-│   └── Uninstall.vbs           # Internal UAC uninstaller helper
+│   └── Run-Hidden.vbs          # Seamless silent launcher (SW_HIDE)
 ├── src/                        # Core runtime modules
 │   ├── Config.ps1              # Config loader & environment setup
 │   ├── Helpers.ps1             # Logging, process checking & toast notifications

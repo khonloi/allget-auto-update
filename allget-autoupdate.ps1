@@ -7,7 +7,7 @@
 # 3. Network Verification: Ensures internet connectivity before checking.
 # 4. Performance Check: Skips updates if system is under heavy load.
 # 5. Per-App Background Upgrades: Updates idle apps individually and silently.
-# 6. Comprehensive Logging: Records all activity, status, and errors to autoupdate.log.
+# 6. Comprehensive Logging: Records all activity, status, and errors to daily log files (autoupdate_YYYY-MM-DD.log).
 # 7. Native Notification: Shows a Windows banner when apps are updated.
 # 8. Supports Chocolatey, Scoop, npm, yarn, and bun updates.
 # ==============================================================================

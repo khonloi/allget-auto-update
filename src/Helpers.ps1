@@ -14,7 +14,9 @@ function Write-Log ($message, $level = "INFO") {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logLine = "[$timestamp] [$level] $message"
     
-    # Write to persistent log file
+    # Write to persistent daily log file
+    $dateStr = Get-Date -Format "yyyy-MM-dd"
+    $script:logPath = Join-Path $script:logsDir "autoupdate_$dateStr.log"
     try { Add-Content -Path $script:logPath -Value $logLine -ErrorAction SilentlyContinue } catch {}
     
     # Write to console

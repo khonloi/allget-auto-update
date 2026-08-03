@@ -46,7 +46,7 @@ AllGet Auto-Update/
 │   ├── Test-WinUIDialog.ps1    # WinUI 3 prompt preview script
 │   └── Test-RunHidden.vbs      # Silent launcher test script
 └── logs/                       # Auto-Update log directory (git-ignored)
-    ├── autoupdate.log          # Persistent activity and status log file
+    ├── autoupdate_YYYY-MM-DD.log # Daily activity and status log files
     └── pending-updates.json    # State tracking file for delayed package updates
 ```
 
@@ -73,7 +73,7 @@ AllGet Auto-Update/
 5. **Configurable System & Network Awareness**: Configurable checks to postpone updates on metered connections, low battery, or high CPU load.
 6. **Update Delay / Postponement**: Option to postpone installing discovered updates by a custom duration up to 7 days for stability.
 7. **Unified JSON Configuration**: Global configuration file (`config.json`) for ignore patterns, system check thresholds, and update delay rules.
-8. **Comprehensive Logging**: Detailed records stored in `logs\autoupdate.log`.
+8. **Comprehensive Logging**: Detailed daily records stored in `logs\autoupdate_YYYY-MM-DD.log`.
 
 ---
 

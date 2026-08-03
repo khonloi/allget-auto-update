@@ -32,6 +32,7 @@ param(
     [switch]$Uninstall,
     [switch]$Test,
     [switch]$TestUI,
+    [switch]$Logs,
     [switch]$Help
 )
 
@@ -199,9 +200,11 @@ function Run-TestUI {
 
 function Show-Logs {
     Show-Header
-    $logPath = Join-Path (Split-Path $PSScriptRoot -Parent) "logs\autoupdate.log"
-    if (Test-Path $logPath) {
-        Write-Status "Displaying last 30 log lines from '$logPath':" "INFO"
+    $logsDir = Join-Path (Split-Path $PSScriptRoot -Parent) "logs"
+    $latestLog = Get-ChildItem -Path $logsDir -Filter "autoupdate*.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($null -ne $latestLog) {
+        $logPath = $latestLog.FullName
+        Write-Status "Displaying last 30 log lines from '$($latestLog.Name)':" "INFO"
         Write-Host "--------------------------------------------------------------------------" -ForegroundColor DarkGray
         Get-Content -Path $logPath -Tail 30 | ForEach-Object {
             if ($_ -match '\[ERROR\]') { Write-Host $_ -ForegroundColor Red }
@@ -213,7 +216,7 @@ function Show-Logs {
         Write-Host "--------------------------------------------------------------------------" -ForegroundColor DarkGray
     }
     else {
-        Write-Status "No log file found at '$logPath' yet." "WARN"
+        Write-Status "No log files found in '$logsDir' yet." "WARN"
     }
 }
 
@@ -240,6 +243,11 @@ if ($Test) {
 
 if ($TestUI) {
     Run-TestUI
+    exit 0
+}
+
+if ($Logs) {
+    Show-Logs
     exit 0
 }
 

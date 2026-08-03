@@ -1,2 +1,1 @@
-logs/autoupdate.log
-logs/pending-updates.json
+logs/*

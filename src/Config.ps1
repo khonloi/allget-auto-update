@@ -8,7 +8,7 @@
 # Configure Log File Directory
 $script:logsDir = Join-Path $PSScriptRoot "..\logs"
 if (-not (Test-Path $script:logsDir)) { New-Item -ItemType Directory -Path $script:logsDir -Force | Out-Null }
-$script:logPath = Join-Path $script:logsDir "autoupdate.log"
+$script:logPath = Join-Path $script:logsDir "autoupdate_$((Get-Date).ToString('yyyy-MM-dd')).log"
 
 # Set Default Configuration Values
 $script:ignoredPatterns = @()

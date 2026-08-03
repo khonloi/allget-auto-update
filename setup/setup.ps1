@@ -81,8 +81,29 @@ function Test-Prerequisites {
     if (-not $wingetCmd) {
         $wingetPath = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
         if (-not (Test-Path $wingetPath)) {
-            Write-Status "WinGet executable was not found on this system. Please install App Installer from Microsoft Store." "ERROR"
-            return $false
+            Write-Status "WinGet executable was not found on this system." "WARN"
+            $installChoice = Read-Host "Would you like to download and install WinGet? (Y/N)"
+            if ($installChoice -match "^[Yy]") {
+                Write-Status "Downloading Microsoft App Installer..." "STEP"
+                $downloadUrl = "https://github.com/microsoft/winget-cli/releases/latest/download/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle"
+                $tempPath = Join-Path $env:TEMP "AppInstaller.msixbundle"
+                try {
+                    Invoke-WebRequest -Uri $downloadUrl -OutFile $tempPath -UseBasicParsing
+                    Write-Status "Installing WinGet..." "STEP"
+                    Add-AppxPackage -Path $tempPath
+                    Remove-Item $tempPath -Force -ErrorAction SilentlyContinue
+                    Write-Status "WinGet installed successfully!" "SUCCESS"
+                }
+                catch {
+                    Write-Status "Failed to install WinGet automatically: $_" "ERROR"
+                    Write-Status "Please install App Installer manually from the Microsoft Store." "INFO"
+                    return $false
+                }
+            }
+            else {
+                Write-Status "Please install App Installer from Microsoft Store to continue." "ERROR"
+                return $false
+            }
         }
     }
     Write-Status "WinGet executable detected successfully." "SUCCESS"

@@ -87,7 +87,7 @@ else {
     }
     catch {
         # Fallback to defaults if the configuration file is malformed
-        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        $timestamp = Get-Date -Format "HH:mm:ss"
         $logLine = "[$timestamp] [ERROR] Failed to parse config.json. Using defaults."
         try { Add-Content -Path $script:logPath -Value $logLine -ErrorAction SilentlyContinue } catch {}
         Write-Host $logLine -ForegroundColor Red

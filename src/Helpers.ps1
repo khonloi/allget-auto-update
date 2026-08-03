@@ -11,7 +11,7 @@
     The severity level of the log (INFO, WARN, ERROR, SUCCESS, SKIP). Defaults to INFO.
 #>
 function Write-Log ($message, $level = "INFO") {
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $timestamp = Get-Date -Format "HH:mm:ss"
     $logLine = "[$timestamp] [$level] $message"
     
     # Write to persistent daily log file

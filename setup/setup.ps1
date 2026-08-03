@@ -64,7 +64,7 @@ function Test-AdminPrivileges {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Elevate-Script {
+function Invoke-ScriptElevation {
     param([string]$Arguments)
     Write-Status "Requesting Administrator privileges (UAC)..." "WARN"
     $scriptPath = $MyInvocation.MyCommand.Definition
@@ -111,7 +111,7 @@ function Install-AutoUpdateTask {
     Write-Status "Starting AllGet Auto-Update Scheduled Task installation..." "STEP"
     
     if (-not (Test-AdminPrivileges)) {
-        Elevate-Script "-Install"
+        Invoke-ScriptElevation "-Install"
         return
     }
 
@@ -163,7 +163,7 @@ function Uninstall-AutoUpdateTask {
     Write-Status "Removing AllGet Auto-Update Scheduled Task..." "STEP"
 
     if (-not (Test-AdminPrivileges)) {
-        Elevate-Script "-Uninstall"
+        Invoke-ScriptElevation "-Uninstall"
         return
     }
 
@@ -184,14 +184,17 @@ function Uninstall-AutoUpdateTask {
     }
 }
 
-function Run-Test {
+function Invoke-TestRun {
     Show-Header
-    Write-Status "Running standalone test of AllGet Auto-Update..." "STEP"
+    Write-Status "Running standalone execution of AllGet Auto-Update..." "STEP"
     $scriptPath = Join-Path (Split-Path $PSScriptRoot -Parent) "allget-autoupdate.ps1"
     & powershell.exe -ExecutionPolicy Bypass -NoProfile -File $scriptPath
+    Write-Host ""
+    Write-Host "Execution completed." -ForegroundColor Green
+    Read-Host "Press Enter to exit..."
 }
 
-function Run-TestUI {
+function Invoke-TestUI {
     Show-Header
     Write-Status "Launching WinUI 3 Prompt Dialog Preview..." "STEP"
     $testUiPath = Join-Path (Split-Path $PSScriptRoot -Parent) "tests\Test-WinUIDialog.ps1"
@@ -237,12 +240,12 @@ if ($Uninstall) {
 }
 
 if ($Test) {
-    Run-Test
+    Invoke-TestRun
     exit 0
 }
 
 if ($TestUI) {
-    Run-TestUI
+    Invoke-TestUI
     exit 0
 }
 
@@ -252,7 +255,7 @@ if ($Logs) {
 }
 
 # Interactive CLI Menu loop if run without arguments
-do {
+while ($true) {
     Show-Header
     Write-Host " Please select an option:" -ForegroundColor Yellow
     Write-Host ""
@@ -267,12 +270,37 @@ do {
     $selection = Read-Host " Enter choice (1-6)"
     
     switch ($selection) {
-        "1" { Install-AutoUpdateTask; Read-Host "`nPress Enter to return to menu..." }
-        "2" { Run-Test; Read-Host "`nPress Enter to return to menu..." }
-        "3" { Run-TestUI; Read-Host "`nPress Enter to return to menu..." }
-        "4" { Show-Logs; Read-Host "`nPress Enter to return to menu..." }
-        "5" { Uninstall-AutoUpdateTask; Read-Host "`nPress Enter to return to menu..." }
-        "6" { Write-Host "`nExiting setup." -ForegroundColor Gray; break }
-        default { Write-Host "Invalid option. Please try again." -ForegroundColor Red; Start-Sleep -Seconds 1 }
+        "1" {
+            Install-AutoUpdateTask
+            Read-Host "Press Enter to return to menu..."
+        }
+        "2" {
+            Invoke-TestRun
+            Read-Host "Press Enter to return to menu..."
+        }
+        "3" {
+            Invoke-TestUI
+            Read-Host "Press Enter to return to menu..."
+        }
+        "4" {
+            Show-Logs
+            Read-Host "Press Enter to return to menu..."
+        }
+        "5" {
+            Uninstall-AutoUpdateTask
+            Read-Host "Press Enter to return to menu..."
+        }
+        "6" {
+            Write-Host "Exiting setup." -ForegroundColor Gray
+            break
+        }
+        default {
+            Write-Host "Invalid option. Please try again." -ForegroundColor Red
+            Start-Sleep -Seconds 1
+        }
     }
-} while ($selection -ne "6")
+
+    if ($selection -eq "6") {
+        break
+    }
+}

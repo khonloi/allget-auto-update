@@ -4,18 +4,19 @@ An automated, intelligent, background app & package updater for Windows 10 & 11 
 
 ---
 
-## 1-Click Installation & Uninstallation
+## 1-Click Control Executables
 
-Simply **double-click** either:
+Simply **double-click** any of the following:
 
-- **`Install.cmd`** to **Install**
-- **`Uninstall.cmd`** to **Uninstall**
+- **`Run.cmd`** to **Run** an auto-update check manually right now
+- **`Install.cmd`** to **Install** the background scheduled task
+- **`Uninstall.cmd`** to **Uninstall** the background scheduled task
 
 ### How it works:
 
 1. Double-clicking automatically triggers Windows Administrator (UAC) elevation.
-2. Registers or removes the seamless silent background task in Windows Task Scheduler automatically.
-3. Holds the window open so you can clearly see the success message.
+2. Runs the manual update check or registers/removes the seamless silent background task in Windows Task Scheduler automatically.
+3. Holds the window open so you can clearly see the output and success message.
 4. Zero terminal commands, flags, or manual steps required!
 
 ---
@@ -24,6 +25,7 @@ Simply **double-click** either:
 
 ```
 AllGet Auto-Update/
+├── Run.cmd                     # [1-CLICK MANUAL RUN] Double-click to run auto-update manually
 ├── Install.cmd                 # [1-CLICK INSTALLER] Double-click to install automatically
 ├── Uninstall.cmd               # [1-CLICK UNINSTALLER] Double-click to remove task cleanly
 ├── allget-autoupdate.ps1       # Core Auto-Update Orchestrator Engine
@@ -32,6 +34,7 @@ AllGet Auto-Update/
 ├── setup/                      # Setup & installation components
 │   ├── setup.ps1               # Installer logic & interactive CLI menu
 │   ├── Run-Hidden.vbs          # Seamless silent launcher (SW_HIDE)
+│   ├── Run.vbs                 # Internal UAC manual run helper
 │   ├── Install.vbs             # Internal UAC installer helper
 │   └── Uninstall.vbs           # Internal UAC uninstaller helper
 ├── src/                        # Core runtime modules
@@ -56,10 +59,12 @@ AllGet Auto-Update/
 
 | File / Command                               | Description                                                |
 | :------------------------------------------- | :--------------------------------------------------------- |
+| `Run.cmd`                                    | **Double-click** to run auto-update manually               |
 | `Install.cmd`                                | **Double-click** to install automatically                  |
 | `Uninstall.cmd`                              | **Double-click** to uninstall automatically                |
 | `.\setup\setup.ps1`                          | Interactive PowerShell setup & maintenance menu            |
 | `powershell -File .\setup\setup.ps1 -Test`   | Runs a manual live auto-update check in the console        |
+| `powershell -File .\setup\setup.ps1 -Logs`   | Displays the latest daily execution log                    |
 | `powershell -File .\setup\setup.ps1 -TestUI` | Previews the WinUI 3 notification & countdown timer prompt |
 
 ---

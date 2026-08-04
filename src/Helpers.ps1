@@ -31,6 +31,37 @@ function Write-Log ($message, $level = "INFO") {
 
 <#
 .SYNOPSIS
+    Retrieves the absolute file path to the Microsoft Store app icon PNG.
+.DESCRIPTION
+    Queries installed AppX packages for Microsoft Store and checks common asset locations
+    for high-resolution app list / logo PNG files.
+.OUTPUTS
+    String containing path to icon, or $null if not found.
+#>
+function Get-MSStoreIconPath {
+    try {
+        $pkg = Get-AppxPackage -Name "Microsoft.WindowsStore" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($pkg -and $pkg.InstallLocation) {
+            $candidates = @(
+                "Assets\AppTiles\StoreAppList.targetsize-256.png",
+                "Assets\AppTiles\StoreAppList.scale-200.png",
+                "Assets\AppTiles\StoreAppList.targetsize-48.png",
+                "Assets\StoreStoreLogo.scale-200.png"
+            )
+            foreach ($relPath in $candidates) {
+                $fullPath = Join-Path $pkg.InstallLocation $relPath
+                if (Test-Path $fullPath) {
+                    return $fullPath
+                }
+            }
+        }
+    }
+    catch {}
+    return $null
+}
+
+<#
+.SYNOPSIS
     Displays a Windows Toast notification for application update status.
 .DESCRIPTION
     Registers a custom AppUserModelId if necessary and triggers a native Windows
@@ -55,9 +86,12 @@ function Show-AppToastNotification ($appName, $isSuccess, $errorDesc) {
         }
         Set-ItemProperty -Path $regPath -Name "DisplayName" -Value "Package Manager" -ErrorAction SilentlyContinue
         
-        $wingetExe = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
-        if (Test-Path $wingetExe) {
-            Set-ItemProperty -Path $regPath -Name "IconUri" -Value $wingetExe -ErrorAction SilentlyContinue
+        $iconPath = Get-MSStoreIconPath
+        if (-not $iconPath) {
+            $iconPath = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
+        }
+        if (Test-Path $iconPath) {
+            Set-ItemProperty -Path $regPath -Name "IconUri" -Value $iconPath -ErrorAction SilentlyContinue
         }
         
         if ($isSuccess) {
@@ -67,15 +101,17 @@ function Show-AppToastNotification ($appName, $isSuccess, $errorDesc) {
             $statusMessage = "Update failed: $errorDesc"
         }
 
+        $imageXml = if ($iconPath -and (Test-Path $iconPath)) { "<image placement=""appLogoOverride"" src=""$iconPath""/>" } else { "" }
+
         $template = @"
 <toast>
     <visual>
         <binding template="ToastGeneric">
+            $imageXml
             <text id="1"><![CDATA[$appName]]></text>
             <text id="2"><![CDATA[$statusMessage]]></text>
         </binding>
     </visual>
-
 </toast>
 "@
 

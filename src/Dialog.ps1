@@ -207,6 +207,61 @@ function Dialog ($appName, $appId, $timeoutSeconds = 30) {
     $reader = [System.Xml.XmlReader]::Create([System.IO.StringReader]::New($xaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
     
+    # Set MS Store icon for Taskbar and Window (both WPF ImageSource and Win32 HWND WM_SETICON)
+    try {
+        Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
+
+        # Ensure process AppUserModelID is explicitly set to MS Store for Windows Taskbar grouping
+        if (-not ("Shell32.Win32AppId" -as [type])) {
+            Add-Type -Name 'Win32AppId' -Namespace 'Shell32' -MemberDefinition '
+                [DllImport("shell32.dll", SetLastError = true)]
+                public static extern int SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string AppID);
+            ' -ErrorAction SilentlyContinue
+        }
+        [Shell32.Win32AppId]::SetCurrentProcessExplicitAppUserModelID("Microsoft.WindowsStore_8wekyb3d8bbwe!App")
+        
+        $iconPath = if (Get-Command Get-MSStoreIconPath -ErrorAction SilentlyContinue) {
+            Get-MSStoreIconPath
+        }
+        else {
+            $pkg = Get-AppxPackage -Name "Microsoft.WindowsStore" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($pkg -and $pkg.InstallLocation) {
+                $candidates = @(
+                    "Assets\AppTiles\StoreAppList.targetsize-256.png",
+                    "Assets\AppTiles\StoreAppList.scale-200.png",
+                    "Assets\AppTiles\StoreAppList.targetsize-48.png"
+                )
+                foreach ($rel in $candidates) {
+                    $p = Join-Path $pkg.InstallLocation $rel
+                    if (Test-Path $p) { $p; break }
+                }
+            }
+        }
+        if ($iconPath -and (Test-Path $iconPath)) {
+            # 1. Set WPF Window Icon property
+            $window.Icon = [System.Windows.Media.Imaging.BitmapFrame]::Create([System.Uri]::new($iconPath))
+
+            # 2. Ensure HWND exists and send Win32 WM_SETICON to force Taskbar to use MS Store icon
+            $helper = [System.Windows.Interop.WindowInteropHelper]::new($window)
+            $hWnd = $helper.EnsureHandle()
+
+            if (-not ("User32.Win32IconMsg" -as [type])) {
+                Add-Type -Name 'Win32IconMsg' -Namespace 'User32' -MemberDefinition '
+                    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+                    public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+                ' -ErrorAction SilentlyContinue
+            }
+
+            if ($hWnd -ne [IntPtr]::Zero) {
+                $bmp = [System.Drawing.Bitmap]::FromFile($iconPath)
+                $hIcon = $bmp.GetHicon()
+                [User32.Win32IconMsg]::SendMessage($hWnd, 0x0080, [IntPtr]0, $hIcon) | Out-Null # WM_SETICON, ICON_SMALL
+                [User32.Win32IconMsg]::SendMessage($hWnd, 0x0080, [IntPtr]1, $hIcon) | Out-Null # WM_SETICON, ICON_BIG
+            }
+        }
+    }
+    catch {}
+
     $btnUpdate = $window.FindName("btnUpdate")
     $btnSkip = $window.FindName("btnSkip")
     $lblTimer = $window.FindName("lblTimer")

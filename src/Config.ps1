@@ -15,6 +15,7 @@ $script:ignoredPatterns = @()
 $script:skipOnMeteredConnection = $true
 $script:minBatteryLevel = 50
 $script:maxCpuLoad = 80
+$script:minStorageGb = 5
 $script:delayUpdatesEnabled = $true
 $script:delayUpdatesDays = 1
 
@@ -27,7 +28,8 @@ if (-not (Test-Path $configPath)) {
   "systemChecks": {
     "skipOnMeteredConnection": true,
     "minBatteryLevel": 50,
-    "maxCpuLoad": 80
+    "maxCpuLoad": 80,
+    "minStorageGb": 5
   },
   "delayUpdates": {
     "enabled": true,
@@ -72,6 +74,9 @@ else {
                 }
                 if ($null -ne $config.systemChecks.maxCpuLoad) {
                     $script:maxCpuLoad = [int]$config.systemChecks.maxCpuLoad
+                }
+                if ($null -ne $config.systemChecks.minStorageGb) {
+                    $script:minStorageGb = [int]$config.systemChecks.minStorageGb
                 }
             }
             # Map update delay settings

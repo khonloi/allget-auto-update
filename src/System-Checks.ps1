@@ -3,7 +3,7 @@
     Evaluates system conditions before allowing package updates.
 .DESCRIPTION
     Checks multiple prerequisites including UAC elevation, network connectivity,
-    metered connections, battery life, CPU load, and the presence of WinGet.
+    metered connections, battery life, CPU load, free storage space, and the presence of WinGet.
     If any check fails, it logs the reason and returns false to abort the update.
 .OUTPUTS
     A boolean indicating whether it is safe to proceed with updates.
@@ -61,6 +61,19 @@ function Invoke-PreRequisiteChecks {
         if ($null -ne $cpuLoad -and $cpuLoad -gt $script:maxCpuLoad) {
             Write-Log "System under heavy load (CPU: $cpuLoad% > $script:maxCpuLoad%). Postponing auto-update." "SKIP"
             return $false
+        }
+    }
+
+    # 4. Storage Check
+    if ($script:minStorageGb -gt 0) {
+        $systemDrive = $env:SystemDrive
+        $disk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='$systemDrive'" -ErrorAction SilentlyContinue
+        if ($disk) {
+            $freeSpaceGb = [math]::Round($disk.FreeSpace / 1GB, 2)
+            if ($freeSpaceGb -lt $script:minStorageGb) {
+                Write-Log "Insufficient storage on $systemDrive (${freeSpaceGb}GB < ${script:minStorageGb}GB). Postponing auto-update." "SKIP"
+                return $false
+            }
         }
     }
 

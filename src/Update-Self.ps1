@@ -19,7 +19,7 @@ function Invoke-SelfUpdate {
         $latestTag = $response.tag_name
         $zipUrl = $response.zipball_url
         
-        $projectRoot = (Get-Item $PSScriptRoot).Parent.FullName
+        $projectRoot = Split-Path -Parent $PSScriptRoot
         $versionFile = Join-Path $projectRoot ".version"
         $currentTag = ""
         if (Test-Path $versionFile) {

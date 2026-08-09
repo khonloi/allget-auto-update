@@ -19,7 +19,8 @@ function Invoke-SelfUpdate {
         $latestTag = $response.tag_name
         $zipUrl = $response.zipball_url
         
-        $versionFile = Join-Path $PSScriptRoot ".version"
+        $projectRoot = (Get-Item $PSScriptRoot).Parent.FullName
+        $versionFile = Join-Path $projectRoot ".version"
         $currentTag = ""
         if (Test-Path $versionFile) {
             $currentTag = Get-Content $versionFile -Raw
@@ -42,8 +43,8 @@ function Invoke-SelfUpdate {
             $extractedRoot = Get-ChildItem -Path $tempDir -Directory | Select-Object -First 1
             
             if ($extractedRoot) {
-                # Copy files from the extracted root folder to the script directory
-                Copy-Item -Path "$($extractedRoot.FullName)\*" -Destination $PSScriptRoot -Recurse -Force
+                # Copy files from the extracted root folder to the project root directory
+                Copy-Item -Path "$($extractedRoot.FullName)\*" -Destination $projectRoot -Recurse -Force
                 
                 # Save the new version tag
                 $latestTag | Out-File -FilePath $versionFile -Encoding UTF8 -NoNewline

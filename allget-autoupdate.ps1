@@ -29,19 +29,25 @@ else {
 # 3. Load Components
 . (Join-Path $PSScriptRoot "src\System-Checks.ps1")
 . (Join-Path $PSScriptRoot "src\Update-Packages.ps1")
+. (Join-Path $PSScriptRoot "src\Update-Self.ps1")
 
 try {
     Write-Log "Starting Auto-Update checks..." "INFO"
 
-    # 4. Perform Pre-requisite Checks
+    # 4. Check for Program Updates (GitHub Self-Updater)
+    if (Invoke-SelfUpdate) {
+        exit 0
+    }
+
+    # 5. Perform Pre-requisite Checks
     if (-not (Invoke-PreRequisiteChecks)) {
         exit 0
     }
 
-    # 5. Execute Updates
+    # 6. Execute Updates
     $stats = Invoke-PackageUpdates
 
-    # 6. Summary Log
+    # 7. Summary Log
     Write-Log "Auto-Update run completed. Updated: $($stats.Updated), Skipped: $($stats.Skipped), Failed: $($stats.Failed)." "INFO"
 
 }

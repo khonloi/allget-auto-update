@@ -4,7 +4,10 @@
 
 NET SESSION >nul 2>&1
 IF %ERRORLEVEL% NEQ 0 (
-    powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    echo Set UAC = CreateObject^("Shell.Application"^) > "%temp%\getadmin.vbs"
+    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "%temp%\getadmin.vbs"
+    "%temp%\getadmin.vbs"
+    del "%temp%\getadmin.vbs"
     exit /b
 )
 

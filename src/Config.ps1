@@ -18,6 +18,7 @@ $script:maxCpuLoad = 80
 $script:minStorageGb = 5
 $script:delayUpdatesEnabled = $true
 $script:delayUpdatesDays = 1
+$script:autoUpdateSelf = $true
 
 # Load or Create Configuration File (config.json)
 $configPath = Join-Path $PSScriptRoot "..\config.json"
@@ -41,7 +42,8 @@ if (-not (Test-Path $configPath)) {
     "^Microsoft\\.Teams",
     "^Microsoft\\.WindowsStore",
     "^Microsoft\\.Defender"
-  ]
+  ],
+  "autoUpdateSelf": true
 }
 "@
     $defaultJson | Set-Content -Path $configPath -Encoding UTF8
@@ -87,6 +89,10 @@ else {
                 if ($null -ne $config.delayUpdates.days) {
                     $script:delayUpdatesDays = [int]$config.delayUpdates.days
                 }
+            }
+            # Map auto update self
+            if ($null -ne $config.autoUpdateSelf) {
+                $script:autoUpdateSelf = [bool]$config.autoUpdateSelf
             }
         }
     }

@@ -54,17 +54,12 @@ function Show-AppToastNotification ($appName, $isSuccess, $errorDesc) {
             New-Item -Path $regPath -Force | Out-Null
         }
         Set-ItemProperty -Path $regPath -Name "DisplayName" -Value "Package Manager" -ErrorAction SilentlyContinue
-        
-        $wingetExe = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
-        if (Test-Path $wingetExe) {
-            Set-ItemProperty -Path $regPath -Name "IconUri" -Value $wingetExe -ErrorAction SilentlyContinue
-        }
-        
+                
         if ($isSuccess) {
             $statusMessage = "Just got updated, check it out."
         }
         else {
-            $statusMessage = "Update failed: $errorDesc"
+            $statusMessage = "Failed to update: $errorDesc"
         }
 
         $template = @"
@@ -146,7 +141,8 @@ function Get-RunningAppProcesses ($appName, $appId, $allProcesses = $null) {
                     continue
                 }
                 $desc = $proc.MainModule.FileVersionInfo.FileDescription 
-            } catch {}
+            }
+            catch {}
             
             if (-not [string]::IsNullOrWhiteSpace($desc)) {
                 foreach ($regex in $escapedWords) {

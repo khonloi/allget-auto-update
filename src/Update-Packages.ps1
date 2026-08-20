@@ -232,7 +232,10 @@ function Invoke-PackageUpdates {
                 if ($allowed) {
                     # User clicked Close & Update
                     Write-Log "User allowed updating '$($app.Name)'. Closing background processes..." "INFO"
-                    foreach ($procInfo in $activeProcs) {
+                    
+                    # Fetch all processes including Session 0 (Services) to completely quit the application
+                    $allMatchingProcs = Get-RunningAppProcesses -appName $app.Name -appId $app.Id -allProcesses (Get-Process)
+                    foreach ($procInfo in $allMatchingProcs) {
                         try {
                             $p = Get-Process -Id $procInfo.Id -ErrorAction SilentlyContinue
                             if ($p) {
@@ -275,6 +278,7 @@ function Invoke-PackageUpdates {
                     -1978335090 { "Different install technology (EXE vs MSI/MSIX). Requires uninstalling current version first." }
                     -1978335189 { "Installer scope or format mismatch (e.g., originally installed via EXE, update is MSI)." }
                     -1978335212 { "Package agreements or catalog source error." }
+                    -1978334969 { "Application or service is currently running in the background." }
                     -1978334967 { "Installation canceled or timed out." }
                     1603 { "Windows Installer (MSI) fatal error." }
                     default { "WinGet exit code $($proc.ExitCode)." }

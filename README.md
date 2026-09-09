@@ -94,6 +94,7 @@ To customize system checks, enable update delays, or prevent specific applicatio
     "enabled": false,
     "days": 7
   },
+  "maxConsecutiveFailures": 3,
   "ignoredPatterns": [
     "^Microsoft\\.Edge",
     "^Microsoft\\.OneDrive",
@@ -111,4 +112,5 @@ To customize system checks, enable update delays, or prevent specific applicatio
 - **`maxCpuLoad`**: Maximum allowed average CPU load percentage before postponing updates (set to `0` or `100` to disable).
 - **`delayUpdates.enabled`**: Set to `true` to delay installing newly discovered updates.
 - **`delayUpdates.days`**: Number of days to postpone installation after an update is first discovered (default: `7`).
+- **`maxConsecutiveFailures`**: Maximum consecutive failed update attempts before temporarily auto-skipping a package until a new upstream version is released (default: `3`).
 - **`ignoredPatterns`**: Array of Regex patterns to ignore specific packages across WinGet, Chocolatey, Scoop, npm, yarn, and bun.

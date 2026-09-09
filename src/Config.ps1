@@ -19,6 +19,7 @@ $script:minStorageGb = 5
 $script:delayUpdatesEnabled = $true
 $script:delayUpdatesDays = 1
 $script:autoUpdateSelf = $true
+$script:maxConsecutiveFailures = 3
 
 # Load or Create Configuration File (config.json)
 $configPath = Join-Path $PSScriptRoot "..\config.json"
@@ -36,6 +37,7 @@ if (-not (Test-Path $configPath)) {
     "enabled": true,
     "days": 1
   },
+  "maxConsecutiveFailures": 3,
   "ignoredPatterns": [
     "^Microsoft\\.Edge",
     "^Microsoft\\.OneDrive",
@@ -93,6 +95,10 @@ else {
             # Map auto update self
             if ($null -ne $config.autoUpdateSelf) {
                 $script:autoUpdateSelf = [bool]$config.autoUpdateSelf
+            }
+            # Map max consecutive failures
+            if ($null -ne $config.maxConsecutiveFailures) {
+                $script:maxConsecutiveFailures = [int]$config.maxConsecutiveFailures
             }
         }
     }

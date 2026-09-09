@@ -22,6 +22,19 @@ function Invoke-PreRequisiteChecks {
         return $false
     }
 
+    # Concurrency Lock: Prevent overlapping runs
+    try {
+        $createdNew = $false
+        $script:appMutex = New-Object System.Threading.Mutex($false, "Global\AllGetAutoUpdate_Instance_Lock", [ref]$createdNew)
+        if (-not $script:appMutex.WaitOne(0, $false)) {
+            Write-Log "Another instance of AllGet Auto-Update is already running. Skipping this cycle." "SKIP"
+            return $false
+        }
+    }
+    catch {
+        # Silently continue if mutex cannot be created
+    }
+
     # 1. Network Check
     if (-not [System.Net.NetworkInformation.NetworkInterface]::GetIsNetworkAvailable()) {
         Write-Log "No network connection detected. Postponing auto-update." "SKIP"

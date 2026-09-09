@@ -38,6 +38,8 @@ function Invoke-PackageUpdates {
                     $script:pendingUpdates[$_.Name] = [PSCustomObject]@{
                         Version      = $_.Value.Version
                         DiscoveredAt = $_.Value.DiscoveredAt
+                        FailCount    = if ($null -ne $_.Value.FailCount) { [int]$_.Value.FailCount } else { 0 }
+                        LastFailCode = if ($null -ne $_.Value.LastFailCode) { $_.Value.LastFailCode } else { $null }
                     }
                 }
             }
@@ -80,6 +82,8 @@ function Invoke-PackageUpdates {
         $script:pendingUpdates[$key] = [PSCustomObject]@{
             Version      = $version
             DiscoveredAt = $now.ToString("o")
+            FailCount    = 0
+            LastFailCode = $null
         }
         $script:pendingUpdatesChanged = $true
         return $true
@@ -90,6 +94,79 @@ function Invoke-PackageUpdates {
         if ($script:pendingUpdates.ContainsKey($key)) {
             $script:pendingUpdates.Remove($key)
             $script:pendingUpdatesChanged = $true
+        }
+    }
+
+    function Test-IsPersistentFailure ($manager, $pkgId, $version) {
+        if ($script:maxConsecutiveFailures -le 0) { return $false }
+        $key = "$manager`:$pkgId"
+        if ($script:pendingUpdates.ContainsKey($key)) {
+            $entry = $script:pendingUpdates[$key]
+            # If the upstream version changed, reset counter so the new version is attempted
+            if ($entry.Version -ne $version) {
+                $entry.Version = $version
+                $entry.FailCount = 0
+                $entry.LastFailCode = $null
+                $script:pendingUpdatesChanged = $true
+                return $false
+            }
+            if ($entry.FailCount -ge $script:maxConsecutiveFailures) {
+                return $true
+            }
+        }
+        return $false
+    }
+
+    function Set-PackageFailure ($manager, $pkgId, $version, $exitCode) {
+        $key = "$manager`:$pkgId"
+        $now = Get-Date
+        if ($script:pendingUpdates.ContainsKey($key)) {
+            $entry = $script:pendingUpdates[$key]
+            if ($entry.Version -ne $version) {
+                $entry.Version = $version
+                $entry.FailCount = 1
+                $entry.DiscoveredAt = $now.ToString("o")
+            }
+            else {
+                $entry.FailCount++
+            }
+            $entry.LastFailCode = $exitCode
+        }
+        else {
+            $script:pendingUpdates[$key] = [PSCustomObject]@{
+                Version      = $version
+                DiscoveredAt = $now.ToString("o")
+                FailCount    = 1
+                LastFailCode = $exitCode
+            }
+        }
+        $script:pendingUpdatesChanged = $true
+    }
+
+    function Set-PackageSuccess ($manager, $pkgId) {
+        Remove-PendingUpdate -manager $manager -pkgId $pkgId
+    }
+
+    function Get-WinGetErrorDescription ($exitCode) {
+        switch ($exitCode) {
+            0 { "Success" }
+            3010 { "Installation successful, reboot pending." }
+            1641 { "Installation successful, reboot initiated." }
+            2359302 { "Update already installed." }
+            -1978335005 { "Reboot required to complete installation." }
+            -1978335189 { "Package is already up to date or no newer update available." }
+            -1978335090 { "Different install technology (EXE vs MSI/MSIX). Requires uninstalling current version first." }
+            -1978335212 { "Package agreements or catalog source error." }
+            -1978334969 { "Application or service is currently running in the background." }
+            -1978334967 { "Installation canceled or timed out." }
+            -1978335229 { "Another installer or Windows Update is currently running." }
+            -1978335226 { "No applicable installer found for this system architecture." }
+            -1978335146 { "Package installer failed (app-specific error)." }
+            -2147012889 { "Network connection timed out or lost during download." }
+            -2145844845 { "Installer hash mismatch, download forbidden (HTTP 403), or tampered package." }
+            1603 { "Windows Installer (MSI) fatal error." }
+            1618 { "Another installation is already in progress." }
+            default { "WinGet exit code $exitCode." }
         }
     }
 
@@ -203,6 +280,14 @@ function Invoke-PackageUpdates {
                 continue
             }
 
+            if (Test-IsPersistentFailure -manager "winget" -pkgId $app.Id -version $app.Available) {
+                $entry = $script:pendingUpdates["winget:$($app.Id)"]
+                $failDesc = Get-WinGetErrorDescription $entry.LastFailCode
+                Write-Log "Auto-skipping '$($app.Name)' ($($app.Id)) - Failed $($entry.FailCount) consecutive times with error: $failDesc. Will retry when a new version is released." "SKIP"
+                $stats.Skipped++
+                continue
+            }
+
             if (Test-IsUpdateDelayed -manager "winget" -pkgId $app.Id -version $app.Available) {
                 $discovered = [datetime]$script:pendingUpdates["winget:$($app.Id)"].DiscoveredAt
                 $daysRemaining = [math]::Ceiling($script:delayUpdatesDays - ((Get-Date) - $discovered).TotalDays)
@@ -256,7 +341,7 @@ function Invoke-PackageUpdates {
             
             Write-Log "Upgrading '$($app.Name)' ($($app.Id)) in background..." "INFO"
             
-            $args = @(
+            $wingetArgs = @(
                 'upgrade', 
                 '--id', $app.Id, 
                 '--silent', 
@@ -266,26 +351,40 @@ function Invoke-PackageUpdates {
                 '--force'
             )
             
-            $proc = Start-Process -FilePath $script:winget -ArgumentList $args -Wait -NoNewWindow -PassThru
-            if ($proc.ExitCode -eq 0) {
-                Write-Log "Updated '$($app.Name)' successfully." "SUCCESS"
+            $proc = Start-Process -FilePath $script:winget -ArgumentList $wingetArgs -Wait -NoNewWindow -PassThru
+            $isSuccess = ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010 -or $proc.ExitCode -eq 1641 -or $proc.ExitCode -eq 2359302 -or $proc.ExitCode -eq -1978335005 -or $proc.ExitCode -eq -1978335189)
+
+            # Retry transient errors once after delay
+            $retryCodes = @(-2147012889, -1978335229, 1618, -1978335212, -1978334967)
+            if (-not $isSuccess -and $retryCodes -contains $proc.ExitCode) {
+                $transientDesc = Get-WinGetErrorDescription $proc.ExitCode
+                Write-Log "Transient error updating '$($app.Name)' ($transientDesc). Retrying in 10 seconds..." "WARN"
+                Start-Sleep -Seconds 10
+                $proc = Start-Process -FilePath $script:winget -ArgumentList $wingetArgs -Wait -NoNewWindow -PassThru
+                $isSuccess = ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010 -or $proc.ExitCode -eq 1641 -or $proc.ExitCode -eq 2359302 -or $proc.ExitCode -eq -1978335005 -or $proc.ExitCode -eq -1978335189)
+            }
+
+            if ($isSuccess) {
+                $successMsg = if ($proc.ExitCode -eq 3010 -or $proc.ExitCode -eq -1978335005) {
+                    "Updated '$($app.Name)' successfully (Reboot pending)."
+                }
+                elseif ($proc.ExitCode -eq -1978335189) {
+                    "'$($app.Name)' is already up to date."
+                }
+                else {
+                    "Updated '$($app.Name)' successfully."
+                }
+                Write-Log $successMsg "SUCCESS"
                 $stats.Updated++
                 Show-AppToastNotification -appName $app.Name -isSuccess $true -errorDesc ""
-                Remove-PendingUpdate -manager "winget" -pkgId $app.Id
+                Set-PackageSuccess -manager "winget" -pkgId $app.Id
             }
             else {
-                $errDesc = switch ($proc.ExitCode) {
-                    -1978335090 { "Different install technology (EXE vs MSI/MSIX). Requires uninstalling current version first." }
-                    -1978335189 { "Installer scope or format mismatch (e.g., originally installed via EXE, update is MSI)." }
-                    -1978335212 { "Package agreements or catalog source error." }
-                    -1978334969 { "Application or service is currently running in the background." }
-                    -1978334967 { "Installation canceled or timed out." }
-                    1603 { "Windows Installer (MSI) fatal error." }
-                    default { "WinGet exit code $($proc.ExitCode)." }
-                }
+                $errDesc = Get-WinGetErrorDescription $proc.ExitCode
                 Write-Log "Update for '$($app.Name)' failed: $errDesc" "WARN"
                 $stats.Failed++
                 Show-AppToastNotification -appName $app.Name -isSuccess $false -errorDesc $errDesc
+                Set-PackageFailure -manager "winget" -pkgId $app.Id -version $app.Available -exitCode $proc.ExitCode
             }
         }
     }
@@ -307,14 +406,21 @@ function Invoke-PackageUpdates {
                     $availVer = $matches[3]
                     if (Test-IsIgnored -pkgName $pkgName -pkgId $pkgName) {
                         Write-Log "Bypassing Chocolatey package '$pkgName' (Matches Ignore List)" "SKIP"
+                        $stats.Skipped++
+                    }
+                    elseif (Test-IsPersistentFailure -manager "choco" -pkgId $pkgName -version $availVer) {
+                        $entry = $script:pendingUpdates["choco:$pkgName"]
+                        Write-Log "Auto-skipping Chocolatey package '$pkgName' - Failed $($entry.FailCount) consecutive times with code $($entry.LastFailCode). Will retry when a new version is released." "SKIP"
+                        $stats.Skipped++
                     }
                     elseif (Test-IsUpdateDelayed -manager "choco" -pkgId $pkgName -version $availVer) {
                         $discovered = [datetime]$script:pendingUpdates["choco:$pkgName"].DiscoveredAt
                         $daysRemaining = [math]::Ceiling($script:delayUpdatesDays - ((Get-Date) - $discovered).TotalDays)
                         Write-Log "Delaying update for '$pkgName' - $daysRemaining day(s) remaining." "SKIP"
+                        $stats.Skipped++
                     }
                     else {
-                        $packagesToUpdate += $pkgName
+                        $packagesToUpdate += [PSCustomObject]@{ Name = $pkgName; Version = $availVer }
                     }
                 }
             }
@@ -324,14 +430,17 @@ function Invoke-PackageUpdates {
             }
             else {
                 foreach ($pkg in $packagesToUpdate) {
-                    Write-Log "Upgrading Chocolatey package '$pkg'..." "INFO"
-                    $proc = Start-Process -FilePath "choco.exe" -ArgumentList "upgrade", $pkg, "-y" -Wait -NoNewWindow -PassThru
+                    Write-Log "Upgrading Chocolatey package '$($pkg.Name)'..." "INFO"
+                    $proc = Start-Process -FilePath "choco.exe" -ArgumentList "upgrade", $pkg.Name, "-y" -Wait -NoNewWindow -PassThru
                     if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 1641 -or $proc.ExitCode -eq 3010) {
-                        Write-Log "Chocolatey package '$pkg' updated successfully." "SUCCESS"
-                        Remove-PendingUpdate -manager "choco" -pkgId $pkg
+                        Write-Log "Chocolatey package '$($pkg.Name)' updated successfully." "SUCCESS"
+                        Set-PackageSuccess -manager "choco" -pkgId $pkg.Name
+                        $stats.Updated++
                     }
                     else {
-                        Write-Log "Chocolatey update for '$pkg' returned exit code $($proc.ExitCode)." "WARN"
+                        Write-Log "Chocolatey update for '$($pkg.Name)' returned exit code $($proc.ExitCode)." "WARN"
+                        Set-PackageFailure -manager "choco" -pkgId $pkg.Name -version $pkg.Version -exitCode $proc.ExitCode
+                        $stats.Failed++
                     }
                 }
             }
@@ -359,14 +468,21 @@ function Invoke-PackageUpdates {
                         if ($pkgName -eq "WARN" -or $pkgName -match "Scoop") { continue }
                         if (Test-IsIgnored -pkgName $pkgName -pkgId $pkgName) {
                             Write-Log "Bypassing Scoop package '$pkgName' (Matches Ignore List)" "SKIP"
+                            $stats.Skipped++
+                        }
+                        elseif (Test-IsPersistentFailure -manager "scoop" -pkgId $pkgName -version $availVer) {
+                            $entry = $script:pendingUpdates["scoop:$pkgName"]
+                            Write-Log "Auto-skipping Scoop package '$pkgName' - Failed $($entry.FailCount) consecutive times with code $($entry.LastFailCode). Will retry when a new version is released." "SKIP"
+                            $stats.Skipped++
                         }
                         elseif (Test-IsUpdateDelayed -manager "scoop" -pkgId $pkgName -version $availVer) {
                             $discovered = [datetime]$script:pendingUpdates["scoop:$pkgName"].DiscoveredAt
                             $daysRemaining = [math]::Ceiling($script:delayUpdatesDays - ((Get-Date) - $discovered).TotalDays)
                             Write-Log "Delaying update for '$pkgName' - $daysRemaining day(s) remaining." "SKIP"
+                            $stats.Skipped++
                         }
                         else {
-                            $packagesToUpdate += $pkgName
+                            $packagesToUpdate += [PSCustomObject]@{ Name = $pkgName; Version = $availVer }
                         }
                     }
                 }
@@ -377,14 +493,17 @@ function Invoke-PackageUpdates {
             }
             else {
                 foreach ($pkg in $packagesToUpdate) {
-                    Write-Log "Upgrading Scoop package '$pkg'..." "INFO"
-                    $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "scoop update $pkg" -Wait -NoNewWindow -PassThru
+                    Write-Log "Upgrading Scoop package '$($pkg.Name)'..." "INFO"
+                    $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "scoop update $($pkg.Name)" -Wait -NoNewWindow -PassThru
                     if ($proc.ExitCode -eq 0) {
-                        Write-Log "Scoop package '$pkg' updated successfully." "SUCCESS"
-                        Remove-PendingUpdate -manager "scoop" -pkgId $pkg
+                        Write-Log "Scoop package '$($pkg.Name)' updated successfully." "SUCCESS"
+                        Set-PackageSuccess -manager "scoop" -pkgId $pkg.Name
+                        $stats.Updated++
                     }
                     else {
-                        Write-Log "Scoop update for '$pkg' returned exit code $($proc.ExitCode)." "WARN"
+                        Write-Log "Scoop update for '$($pkg.Name)' returned exit code $($proc.ExitCode)." "WARN"
+                        Set-PackageFailure -manager "scoop" -pkgId $pkg.Name -version $pkg.Version -exitCode $proc.ExitCode
+                        $stats.Failed++
                     }
                 }
             }
@@ -403,39 +522,68 @@ function Invoke-PackageUpdates {
             $packagesToUpdate = @()
             foreach ($line in $npmOutdated) {
                 if ([string]::IsNullOrWhiteSpace($line)) { continue }
-                $parts = $line -split ':'
-                if ($parts.Count -gt 0) {
-                    $pkgPath = $parts[0]
-                    # path is typically like C:\Users\user\AppData\Roaming\npm\node_modules\package
-                    $pkgName = Split-Path $pkgPath -Leaf
-                    $availVer = if ($parts.Count -gt 3) { $parts[3] } else { "UNKNOWN" }
+                $pkgName = $null
+                # Match path:wanted:current:latest:type, handling Windows drive letter colons correctly
+                if ($line -match '^(.+):([^:]+):([^:]+):([^:]+):([^:]+)$') {
+                    $pkgPath = $matches[1]
+                    $wantedSpec = $matches[2]
+                    $availSpec = $matches[4]
+                    $lastAt = $wantedSpec.LastIndexOf('@')
+                    if ($lastAt -gt 0) {
+                        $pkgName = $wantedSpec.Substring(0, $lastAt)
+                    }
+                    else {
+                        $pkgName = Split-Path $pkgPath -Leaf
+                    }
+                    $availAt = $availSpec.LastIndexOf('@')
+                    if ($availAt -gt 0) {
+                        $availVer = $availSpec.Substring($availAt + 1)
+                    }
+                }
+                else {
+                    $parts = $line -split ':'
+                    if ($parts.Count -gt 0) {
+                        $pkgName = Split-Path $parts[0] -Leaf
+                    }
+                }
+
+                if ($pkgName) {
                     if (Test-IsIgnored -pkgName $pkgName -pkgId $pkgName) {
                         Write-Log "Bypassing npm package '$pkgName' (Matches Ignore List)" "SKIP"
+                        $stats.Skipped++
+                    }
+                    elseif (Test-IsPersistentFailure -manager "npm" -pkgId $pkgName -version $availVer) {
+                        $entry = $script:pendingUpdates["npm:$pkgName"]
+                        Write-Log "Auto-skipping npm package '$pkgName' - Failed $($entry.FailCount) consecutive times with code $($entry.LastFailCode). Will retry when a new version is released." "SKIP"
+                        $stats.Skipped++
                     }
                     elseif (Test-IsUpdateDelayed -manager "npm" -pkgId $pkgName -version $availVer) {
                         $discovered = [datetime]$script:pendingUpdates["npm:$pkgName"].DiscoveredAt
                         $daysRemaining = [math]::Ceiling($script:delayUpdatesDays - ((Get-Date) - $discovered).TotalDays)
                         Write-Log "Delaying update for '$pkgName' - $daysRemaining day(s) remaining." "SKIP"
+                        $stats.Skipped++
                     }
                     else {
-                        $packagesToUpdate += $pkgName
+                        $packagesToUpdate += [PSCustomObject]@{ Name = $pkgName; Version = $availVer }
                     }
                 }
             }
-
             if ($packagesToUpdate.Count -eq 0) {
                 Write-Log "All npm packages are up to date or ignored." "SUCCESS"
             }
             else {
                 foreach ($pkg in $packagesToUpdate) {
-                    Write-Log "Upgrading npm package '$pkg'..." "INFO"
-                    $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "npm update -g $pkg" -Wait -NoNewWindow -PassThru
+                    Write-Log "Upgrading npm package '$($pkg.Name)'..." "INFO"
+                    $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "npm install -g $($pkg.Name)" -Wait -NoNewWindow -PassThru
                     if ($proc.ExitCode -eq 0) {
-                        Write-Log "npm package '$pkg' updated successfully." "SUCCESS"
-                        Remove-PendingUpdate -manager "npm" -pkgId $pkg
+                        Write-Log "npm package '$($pkg.Name)' updated successfully." "SUCCESS"
+                        Set-PackageSuccess -manager "npm" -pkgId $pkg.Name
+                        $stats.Updated++
                     }
                     else {
-                        Write-Log "npm update for '$pkg' returned exit code $($proc.ExitCode)." "WARN"
+                        Write-Log "npm update for '$($pkg.Name)' returned exit code $($proc.ExitCode)." "WARN"
+                        Set-PackageFailure -manager "npm" -pkgId $pkg.Name -version $pkg.Version -exitCode $proc.ExitCode
+                        $stats.Failed++
                     }
                 }
             }
@@ -458,14 +606,21 @@ function Invoke-PackageUpdates {
                     $availVer = $matches[2]
                     if (Test-IsIgnored -pkgName $pkgName -pkgId $pkgName) {
                         Write-Log "Bypassing yarn package '$pkgName' (Matches Ignore List)" "SKIP"
+                        $stats.Skipped++
+                    }
+                    elseif (Test-IsPersistentFailure -manager "yarn" -pkgId $pkgName -version $availVer) {
+                        $entry = $script:pendingUpdates["yarn:$pkgName"]
+                        Write-Log "Auto-skipping yarn package '$pkgName' - Failed $($entry.FailCount) consecutive times with code $($entry.LastFailCode). Will retry when a new version is released." "SKIP"
+                        $stats.Skipped++
                     }
                     elseif (Test-IsUpdateDelayed -manager "yarn" -pkgId $pkgName -version $availVer) {
                         $discovered = [datetime]$script:pendingUpdates["yarn:$pkgName"].DiscoveredAt
                         $daysRemaining = [math]::Ceiling($script:delayUpdatesDays - ((Get-Date) - $discovered).TotalDays)
                         Write-Log "Delaying update for '$pkgName' - $daysRemaining day(s) remaining." "SKIP"
+                        $stats.Skipped++
                     }
                     else {
-                        $packagesToUpdate += $pkgName
+                        $packagesToUpdate += [PSCustomObject]@{ Name = $pkgName; Version = $availVer }
                     }
                 }
             }
@@ -475,14 +630,17 @@ function Invoke-PackageUpdates {
             }
             else {
                 foreach ($pkg in $packagesToUpdate) {
-                    Write-Log "Upgrading yarn package '$pkg'..." "INFO"
-                    $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "yarn global upgrade $pkg" -Wait -NoNewWindow -PassThru
+                    Write-Log "Upgrading yarn package '$($pkg.Name)'..." "INFO"
+                    $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "yarn global upgrade $($pkg.Name)" -Wait -NoNewWindow -PassThru
                     if ($proc.ExitCode -eq 0) {
-                        Write-Log "yarn package '$pkg' updated successfully." "SUCCESS"
-                        Remove-PendingUpdate -manager "yarn" -pkgId $pkg
+                        Write-Log "yarn package '$($pkg.Name)' updated successfully." "SUCCESS"
+                        Set-PackageSuccess -manager "yarn" -pkgId $pkg.Name
+                        $stats.Updated++
                     }
                     else {
-                        Write-Log "yarn update for '$pkg' returned exit code $($proc.ExitCode)." "WARN"
+                        Write-Log "yarn update for '$($pkg.Name)' returned exit code $($proc.ExitCode)." "WARN"
+                        Set-PackageFailure -manager "yarn" -pkgId $pkg.Name -version $pkg.Version -exitCode $proc.ExitCode
+                        $stats.Failed++
                     }
                 }
             }
@@ -500,22 +658,26 @@ function Invoke-PackageUpdates {
             Remove-Item -Path $tempFiles["bun"].FullName -Force -ErrorAction SilentlyContinue
             $packagesToUpdate = @()
             foreach ($line in $bunList) {
-                # bun pm ls outputs like:
-                # C:\Users\user\.bun\install\global\node_modules (X)
-                # ├── package@version
                 if ($line -match '([^@\s]+)@(.+)') {
                     $pkgName = $matches[1]
                     $availVer = $matches[2].Trim()
                     if (Test-IsIgnored -pkgName $pkgName -pkgId $pkgName) {
                         Write-Log "Bypassing bun package '$pkgName' (Matches Ignore List)" "SKIP"
+                        $stats.Skipped++
+                    }
+                    elseif (Test-IsPersistentFailure -manager "bun" -pkgId $pkgName -version $availVer) {
+                        $entry = $script:pendingUpdates["bun:$pkgName"]
+                        Write-Log "Auto-skipping bun package '$pkgName' - Failed $($entry.FailCount) consecutive times with code $($entry.LastFailCode). Will retry when a new version is released." "SKIP"
+                        $stats.Skipped++
                     }
                     elseif (Test-IsUpdateDelayed -manager "bun" -pkgId $pkgName -version $availVer) {
                         $discovered = [datetime]$script:pendingUpdates["bun:$pkgName"].DiscoveredAt
                         $daysRemaining = [math]::Ceiling($script:delayUpdatesDays - ((Get-Date) - $discovered).TotalDays)
                         Write-Log "Delaying update for '$pkgName' - $daysRemaining day(s) remaining." "SKIP"
+                        $stats.Skipped++
                     }
                     else {
-                        $packagesToUpdate += $pkgName
+                        $packagesToUpdate += [PSCustomObject]@{ Name = $pkgName; Version = $availVer }
                     }
                 }
             }
@@ -525,14 +687,17 @@ function Invoke-PackageUpdates {
             }
             else {
                 foreach ($pkg in $packagesToUpdate) {
-                    Write-Log "Upgrading bun package '$pkg'..." "INFO"
-                    $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "bun update -g $pkg" -Wait -NoNewWindow -PassThru
+                    Write-Log "Upgrading bun package '$($pkg.Name)'..." "INFO"
+                    $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "bun update -g $($pkg.Name)" -Wait -NoNewWindow -PassThru
                     if ($proc.ExitCode -eq 0) {
-                        Write-Log "bun package '$pkg' updated successfully." "SUCCESS"
-                        Remove-PendingUpdate -manager "bun" -pkgId $pkg
+                        Write-Log "bun package '$($pkg.Name)' updated successfully." "SUCCESS"
+                        Set-PackageSuccess -manager "bun" -pkgId $pkg.Name
+                        $stats.Updated++
                     }
                     else {
-                        Write-Log "bun update for '$pkg' returned exit code $($proc.ExitCode)." "WARN"
+                        Write-Log "bun update for '$($pkg.Name)' returned exit code $($proc.ExitCode)." "WARN"
+                        Set-PackageFailure -manager "bun" -pkgId $pkg.Name -version $pkg.Version -exitCode $proc.ExitCode
+                        $stats.Failed++
                     }
                 }
             }

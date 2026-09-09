@@ -55,3 +55,12 @@ catch {
     Write-Log "Fatal error during script execution: $_" "ERROR"
     exit 1
 }
+finally {
+    if ($script:appMutex) {
+        try {
+            $script:appMutex.ReleaseMutex()
+            $script:appMutex.Dispose()
+        }
+        catch {}
+    }
+}
